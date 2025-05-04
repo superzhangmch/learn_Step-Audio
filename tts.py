@@ -54,7 +54,7 @@ class StepAudioTTS:
             os.path.join(model_path, "CosyVoice-300M-25Hz-Music")
         )
         self.encoder = encoder
-        self.sys_prompt_dict = {
+        self.sys_prompt_dict = { # 下面是用于生成的 system prompt
             "sys_prompt_for_rap": "请参考对话历史里的音色，用RAP方式将文本内容大声说唱出来。",
             "sys_prompt_for_vocal": "请参考对话历史里的音色，用哼唱的方式将文本内容大声唱出来。",
             "sys_prompt_wo_spk": '作为一名卓越的声优演员，你的任务是根据文本中（）或()括号内标注的情感、语种或方言、音乐哼唱、语音调整等标签，以丰富细腻的情感和自然顺畅的语调来朗读文本。\n# 情感标签涵盖了多种情绪状态，包括但不限于：\n- "高兴1"\n- "高兴2"\n- "生气1"\n- "生气2"\n- "悲伤1"\n- "撒娇1"\n\n# 语种或方言标签包含多种语言或方言，包括但不限于：\n- "中文"\n- "英文"\n- "韩语"\n- "日语"\n- "四川话"\n- "粤语"\n- "广东话"\n\n# 音乐哼唱标签包含多种类型歌曲哼唱，包括但不限于：\n- "RAP"\n- "哼唱"\n\n# 语音调整标签，包括但不限于：\n- "慢速1"\n- "慢速2"\n- "快速1"\n- "快速2"\n\n请在朗读时，根据这些情感标签的指示，调整你的情感、语气、语调和哼唱节奏，以确保文本的情感和意义得到准确而生动的传达，如果没有()或（）括号，则根据文本语义内容自由演绎。',
@@ -63,6 +63,10 @@ class StepAudioTTS:
         self.register_speakers()
 
     def __call__(self, text: str, prompt_speaker: str, clone_dict: dict | None = None):
+        '''
+        text: 希望作 tts 的文本
+        prompt_speaker: 取值比如 Tingting
+        '''
         if clone_dict:
             clone_prompt_code, clone_prompt_token, clone_prompt_token_len, clone_speech_feat, clone_speech_feat_len, clone_speech_embedding = (
                 self.preprocess_prompt_wav(clone_dict['wav_path'])
@@ -85,7 +89,7 @@ class StepAudioTTS:
                 prompt_speaker_info = self.speakers_info[
                     f"{prompt_speaker}{instruction_name}"
                 ]
-            cosy_model = self.music_cosy_model
+            cosy_model = self.music_cosy_model # 实测，随便一段文字，即使选择 RAP 或哼唱，往往结果也是朗读。只有是真的歌词，或诗歌（形式上符合）时，才会唱
         else:
             cosy_model = self.common_cosy_model
 
@@ -93,13 +97,14 @@ class StepAudioTTS:
             prompt_speaker = ''
             prompt_speaker_info = clone_speakers_info
 
-        token_ids = self.tokenize(
-            text,
-            prompt_speaker_info["prompt_text"],
+        token_ids = self.tokenize( # 最终结果是，相当于做了个 few shot 那样的 in-context-learning 一样的 tts 生成
+            text,                               # 被 tts 的 text
+            prompt_speaker_info["prompt_text"], # 作为 in-context-learning example 的 text
             prompt_speaker,
-            prompt_speaker_info["prompt_code"],
+            prompt_speaker_info["prompt_code"], # prompt_text背后的 wav 文件的 audio tokens
         )
-        output_ids = self.llm.generate(
+        output_ids = self.llm.generate( # 调用 3B model 作语音生成。注意 3B 的 Step-Audio-TTS-3B，与 130B 的 Step-Audio-Chat，他们的model结构一模一样。代码是现实，130B生成 text 后，用 3B model来做 tts
+                                        # 但是它用 3B 来做 tts 的时候，其实也是当一个 audio-LLM 方式激发出的 tts 能力
             torch.tensor([token_ids]).to(torch.long).to("cuda"),
             max_length=8192,
             temperature=0.7,
@@ -168,7 +173,7 @@ class StepAudioTTS:
         sys_tokens = self.tokenizer.encode(f"system\n{prompt}")
 
         history = [1]
-        history.extend([4] + sys_tokens + [3])
+        history.extend([4] + sys_tokens + [3])  # system prompt
 
         _prefix_tokens = self.tokenizer.encode("\n")
         prompt_token_encode = self.tokenizer.encode("\n" + prompt_text)
@@ -180,21 +185,21 @@ class StepAudioTTS:
         qrole_toks = self.tokenizer.encode("human\n")
         arole_toks = self.tokenizer.encode("assistant\n")
 
-        history.extend(
+        history.extend(     # 给一个text-audio 例子，让对新的 text 生成 tts 结果。注意前面已经给了 system prompt
             [4]
-            + qrole_toks
-            + prompt_tokens
+            + qrole_toks    # human token
+            + prompt_tokens # text tokens
             + [3]
             + [4]
-            + arole_toks
-            + prompt_code
+            + arole_toks    # assistant
+            + prompt_code   # 2:3 interleaved audio tokens
             + [3]
             + [4]
-            + qrole_toks
-            + target_tokens
+            + qrole_toks    # human token
+            + target_tokens # text tokens
             + [3]
             + [4]
-            + arole_toks
+            + arole_toks    # assistant token
         )
         return history
 
@@ -210,7 +215,7 @@ class StepAudioTTS:
         )(prompt_wav)
 
         speech_feat, speech_feat_len = (
-            self.common_cosy_model.frontend._extract_speech_feat(prompt_wav_22k)
+            self.common_cosy_model.frontend._extract_speech_feat(prompt_wav_22k) # 这里获得的就是 paper 中所说的 2:3 交错的 audio tokens
         )
         speech_embedding = self.common_cosy_model.frontend._extract_spk_embedding(
             prompt_wav_16k
