@@ -16,8 +16,8 @@ class StepAudio:
             llm_path, trust_remote_code=True
         )
         self.encoder = StepAudioTokenizer(tokenizer_path)
-        self.decoder = StepAudioTTS(tts_path, self.encoder)
-        self.llm = AutoModelForCausalLM.from_pretrained(
+        self.decoder = StepAudioTTS(tts_path, self.encoder) # 内部是 3B model
+        self.llm = AutoModelForCausalLM.from_pretrained(    # 内部是 130B model。130B和3B的网络结构一模一样
             llm_path,
             torch_dtype=torch.bfloat16,
             device_map="auto",
@@ -37,8 +37,8 @@ class StepAudio:
             token_ids, max_new_tokens=2048, temperature=0.7, top_p=0.9, do_sample=True
         )
         output_token_ids = outputs[:, token_ids.shape[-1] : -1].tolist()[0]
-        output_text = self.llm_tokenizer.decode(output_token_ids)
-        output_audio, sr = self.decoder(output_text, speaker_id)
+        output_text = self.llm_tokenizer.decode(output_token_ids) # 返回的是 130B model 生成的text 结果。按说 130B 也能直接生成 audio token，看到某处说，因为计算性能等问题（毕竟1s 45 个语音token计算压力大），实际并不用130b的 audio tokens
+        output_audio, sr = self.decoder(output_text, speaker_id)  # 用的同构的3B model 根据 text，生成 audio tokens，再生成语音
         if speed_ratio != 1.0:
             output_audio = speech_adjust(output_audio, sr, speed_ratio)
         if volumn_ratio != 1.0:
